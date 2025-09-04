@@ -1,4 +1,4 @@
-name: Restore repo from previous commit (safe branch + merge link)
+name: Restore repo from previous commit
 
 on:
   workflow_dispatch:
@@ -42,22 +42,18 @@ jobs:
           SHA="${{ github.event.inputs.restore_sha }}"
           PATHS="${{ github.event.inputs.include_paths }}"
           if [ -z "$PATHS" ]; then
-            # Alles terugzetten
             git checkout "$SHA" -- .
           else
-            # Alleen geselecteerde paden/globs (spaties scheiden)
             for p in $PATHS; do
               git checkout "$SHA" -- "$p" || true
             done
           fi
 
-          # Workflows NIET aanpassen, tenzij expliciet gevraagd
           if [ "${{ github.event.inputs.include_workflows }}" != "true" ]; then
             git restore --staged .github/workflows || true
             git checkout -- .github/workflows || true
           fi
 
-          # Geen ZIP-meuk mee committen
           find . -maxdepth 1 -name "*.zip" -print -exec git rm -f {} \; || true
 
       - name: Commit & push restore branch
