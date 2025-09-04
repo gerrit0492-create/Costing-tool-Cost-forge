@@ -1,1 +1,76 @@
+name: Auto Unpack & Stage (ZIP → branch + merge link)
 
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "*.zip"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
+      - name: Find ZIP to unpack
+        id: findzip
+        shell: bash
+        run: |
+          set -euo pipefail
+          zips=$(ls -1 *.zip 2>/dev/null || true)
+          if [[ -n "$zips" ]]; then
+            first=$(echo "$zips" | head -n1)
+            echo "zipfile=$first" >> "$GITHUB_OUTPUT"
+          else
+            echo "No ZIP found in repo root" >&2
+            exit 1
+          fi
+
+      - name: Unpack ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Unzipping: ${{ steps.findzip.outputs.zipfile }}"
+          unzip -o "${{ steps.findzip.outputs.zipfile }}" -d .
+          rm -f "${{ steps.findzip.outputs.zipfile }}"
+          git status --porcelain
+
+      - name: Never modify workflows (avoid GitHub restriction)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Herstel workflow-bestanden naar de gecheckte staat,
+          # zodat deze job ze niet wijzigt/toevoegt.
+          if [ -d ".github/workflows" ]; then
+            git checkout -- .github/workflows || true
+          fi
+
+      - name: Commit and push to a fresh branch (always)
+        env:
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "chore: auto-unpack clean repo (staged to branch)"
+            BR="auto/unpack-clean-$(date +%Y%m%d-%H%M%S)"
+            git push -u origin HEAD:"$BR"
+            echo "✅ Changes pushed to ${BR}" >> "$GITHUB_STEP_SUMMARY"
+            echo "👉 Merge: https://github.com/${REPO}/compare/main...${BR}?expand=1" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ℹ️ Nothing to commit" >> "$GITHUB_STEP_SUMMARY"
+          fi
