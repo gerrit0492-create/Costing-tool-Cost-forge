@@ -1,1 +1,78 @@
+name: Restore repo from previous commit (safe branch + merge link)
 
+on:
+  workflow_dispatch:
+    inputs:
+      restore_sha:
+        description: "Commit SHA van de laatste volledige/werkende repo"
+        required: true
+      include_paths:
+        description: "Optioneel: glob(s) om alleen bepaalde paden te herstellen (bv: pages/** utils/**)"
+        required: false
+        default: ""
+      include_workflows:
+        description: "Ook .github/workflows herstellen? (meestal NEE)"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create restore branch
+        id: br
+        run: |
+          set -euo pipefail
+          BR="restore/${{ github.event.inputs.restore_sha }}-$(date +%Y%m%d-%H%M%S)"
+          echo "branch=$BR" >> "$GITHUB_OUTPUT"
+          git checkout -b "$BR"
+
+      - name: Restore files from SHA (ALL or SELECTIVE)
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="${{ github.event.inputs.restore_sha }}"
+          PATHS="${{ github.event.inputs.include_paths }}"
+          if [ -z "$PATHS" ]; then
+            # Alles terugzetten
+            git checkout "$SHA" -- .
+          else
+            # Alleen geselecteerde paden/globs (spaties scheiden)
+            for p in $PATHS; do
+              git checkout "$SHA" -- "$p" || true
+            done
+          fi
+
+          # Workflows NIET aanpassen, tenzij expliciet gevraagd
+          if [ "${{ github.event.inputs.include_workflows }}" != "true" ]; then
+            git restore --staged .github/workflows || true
+            git checkout -- .github/workflows || true
+          fi
+
+          # Geen ZIP-meuk mee committen
+          find . -maxdepth 1 -name "*.zip" -print -exec git rm -f {} \; || true
+
+      - name: Commit & push restore branch
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "restore: repo content from ${{ github.event.inputs.restore_sha }}"
+            git push -u origin "$(git branch --show-current)"
+            echo "✅ Restore branch: $(git branch --show-current)" >> "$GITHUB_STEP_SUMMARY"
+            echo "👉 Merge: https://github.com/${REPO}/compare/main...$(git branch --show-current)?expand=1" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ℹ️ Niets te committen (controleer SHA/paden)" >> "$GITHUB_STEP_SUMMARY"
+          fi
